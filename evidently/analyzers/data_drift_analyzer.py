@@ -8,6 +8,8 @@ import numpy as np
 
 from scipy.stats import ks_2samp, chisquare
 
+from joblib import Parallel, delayed
+import multiprocessing
 
 class DataDriftAnalyzer(Analyzer):
     def calculate(self, reference_data: pd.DataFrame, current_data: pd.DataFrame, column_mapping):
@@ -45,15 +47,28 @@ class DataDriftAnalyzer(Analyzer):
 
         #calculate result
         result['metrics'] = {}
-        for feature_name in num_feature_names:
-            result['metrics'][feature_name] = dict(
-                current_small_hist=[t.tolist() for t in np.histogram(current_data[feature_name][np.isfinite(current_data[feature_name])],
-                                             bins=10, density=True)],
-                ref_small_hist=[t.tolist() for t in np.histogram(reference_data[feature_name][np.isfinite(reference_data[feature_name])],
-                                            bins=10, density=True)],
+        
+        
+        def _calculate_numeric_data_drift(feature_name, current, reference, bins=10):
+            return feature_name, dict(
+                current_small_hist=[t.tolist() for t in np.histogram(current[np.isfinite(current)],
+                                             bins=bins, density=True)],
+                ref_small_hist=[t.tolist() for t in np.histogram(reference[np.isfinite(reference)],
+                                            bins=bins, density=True)],
                 feature_type='num',
-                p_value=ks_2samp(reference_data[feature_name], current_data[feature_name])[1]
+                p_value=ks_2samp(reference, current)[1]
             )
+        
+        print("Starting parallel run...")
+        results = Parallel(n_jobs=multiprocessing.cpu_count()) (
+            delayed(_calculate_numeric_data_drift)(feature_name,current_data[feature_name],reference_data[feature_name],10) for feature_name in num_feature_names
+        )
+        print("Complete")
+        print("Attaching results...")
+        for feature_name, r in results:
+            result['metrics'][feature_name] = r
+            
+        print("Complete")
 
         for feature_name in cat_feature_names:
             ref_feature_vc = reference_data[feature_name][np.isfinite(reference_data[feature_name])].value_counts()
